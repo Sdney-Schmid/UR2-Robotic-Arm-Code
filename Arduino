@@ -1,0 +1,65 @@
+#include <Servo.h>
+
+const int mag = 5;
+const int ledPin = 13;//the pin that LED is attached to
+int inComingByte;//a variabl to lad incoming serial data into  
+Servo servo1;//turn table servo
+Servo servo2;//base arm servo
+Servo servo3; // top arm servo
+int pos = 0;
+
+void setup() {
+  // put your setup code here, to run once:
+Serial.begin(115200);
+pinMode(ledPin, OUTPUT);
+servo1.attach(11);//turn table
+servo2.attach(10); //base
+servo3.attach(9);//arm
+pinMode(mag, OUTPUT);
+}
+
+//Magnet : digitalWrite(mag, HIGH); digitalWrite(mag, LOW);
+void loop() {
+  // put your main code here, to run repeatedly:
+if(Serial.available() > 0){
+  inComingByte = Serial.read();
+  if(inComingByte > 0){
+    digitalWrite(ledPin, HIGH);
+  }
+  if(inComingByte == 0){
+    digitalWrite(ledPin, LOW);
+  }
+  Serial.println(inComingByte);
+  for (pos = 0; pos <= 180; pos += 1){
+    servo1.write(pos);
+    delay(20);
+  }
+  for (pos = 180; pos >= 0; pos -= 1){
+    servo1.write(pos);
+    delay(20);
+  }
+  for (pos = 0; pos <= 90; pos += 1){
+    servo2.write(pos);
+    Serial.write("HI");
+    delay(20);
+  }
+    for (pos = 90; pos >= 0; pos -= 1){
+    servo2.write(pos);
+    Serial.write("Hey");
+    delay(20);
+  }
+    for (pos = 0; pos <= 90; pos += 1){
+    servo3.write(pos);
+    Serial.write("Hello");
+    delay(20);
+    digitalWrite(mag, HIGH); 
+    digitalWrite(mag, LOW);
+  }
+    for (pos = 90; pos >= 0; pos -= 1){
+    servo3.write(pos);
+    delay(20);
+    digitalWrite(mag, HIGH); 
+    digitalWrite(mag, LOW);
+  }
+}
+}

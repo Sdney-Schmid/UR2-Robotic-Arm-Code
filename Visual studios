@@ -1,0 +1,234 @@
+using Emgu.CV;
+using Emgu.CV.CvEnum;
+using Emgu.CV.Structure;
+using Emgu.CV.Util;
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Drawing;
+using System.IO.Ports;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace Lab_10
+{
+    public partial class Form1 : Form
+    {
+        SerialPort arduinoSerial = new SerialPort();
+        bool enableCoordinateSending = true;
+        Thread serialMonitoringThread;
+        VideoCapture _capture;
+        Thread _captureThread;
+        byte[] buffer = new byte[1];
+
+        public Form1()
+        {
+            InitializeComponent();
+        }
+        private void Form1_Load(object sender, EventArgs e)
+        {
+        
+            try
+            {
+                arduinoSerial.PortName = "COM8";
+                arduinoSerial.BaudRate = 9600;
+                arduinoSerial.Open();
+                arduinoSerial.DiscardOutBuffer();
+                arduinoSerial.DiscardInBuffer();
+
+                serialMonitoringThread = new Thread(MonitorSerialData);
+
+
+
+                sendGT0TextInput.Text = "180";
+
+                serialMonitoringThread.Start();
+                xInput.Text = "130";
+                yInput.Text = "224";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Error Initializing COM port");
+                Close();
+            }
+            // create the capture object and processing thread
+            _capture = new VideoCapture(1);
+            _captureThread = new Thread(ProcessImage);
+            _captureThread.Start();
+        }
+        private void sendBtn_Click(object sender, EventArgs e)
+        {
+            if (!enableCoordinateSending)
+            {
+                MessageBox.Show("Temporarily locked...");
+                return;
+            }
+            int x = -1;
+            int y = -1;
+            if (int.TryParse(xInput.Text, out x) && int.TryParse(yInput.Text, out y))
+            {
+                byte[] buffer = new byte[4] {
+                Encoding.ASCII.GetBytes("<")[0],
+                Convert.ToByte(x),
+                Convert.ToByte(y),
+                Encoding.ASCII.GetBytes(">")[0]
+            };
+                arduinoSerial.Write(buffer, 0, 4);
+            }
+            else
+            {
+                MessageBox.Show("X and Y values must be integers", "Unable to parse coordinates");
+            }
+        }
+        private void MonitorSerialData()
+        {
+            while (true)
+            {
+                // block until \n character is received, extract command data
+                string msg = arduinoSerial.ReadLine();
+                // confirm the string has both < and > characters
+                if (msg.IndexOf("<") == -1 || msg.IndexOf(">") == -1)
+                {
+                    continue;
+                }
+                // remove everything before (and including) the < character
+                msg = msg.Substring(msg.IndexOf("<") + 1);
+                // remove everything after (and including) the > character
+                msg = msg.Remove(msg.IndexOf(">"));
+                // if the resulting string is empty, disregard and move on
+                if (msg.Length == 0)
+                {
+                    continue;
+                }
+                // parse the command
+                if (msg.Substring(0, 1) == "S")
+                {
+                    // command is to suspend, toggle states accordingly:
+                    ToggleFieldAvailability(msg.Substring(1, 1) == "1");
+                }
+                else if (msg.Substring(0, 1) == "P")
+                {
+
+                    // command is to display the point data, output to the text field:
+                    Invoke(new Action(() =>
+                    {
+                        returnedPointLbl.Text = $"Returned Point Data: {msg.Substring(1)}";
+                    }));
+                }
+            }
+        }
+        private void ToggleFieldAvailability(bool suspend)
+        {
+            Invoke(new Action(() =>
+            {
+                enableCoordinateSending = !suspend;
+                lockStateToolStripStatusLabel.Text = $"State: {(suspend ? "Locked" : "Unlocked")}";
+            }));
+        }
+        private void ProcessImage()
+        {
+            while (_capture.IsOpened)
+            {
+                // frame maintenance
+                Mat workingImage = _capture.QueryFrame();
+                // resize to PictureBox aspect ratio
+                int newHeight = (workingImage.Size.Height * sourcePictureBox.Size.Width) / workingImage.Size.Width;
+                Size newSize = new Size(sourcePictureBox.Size.Width, newHeight);
+                CvInvoke.Resize(workingImage, workingImage, newSize);
+                // as a test for comparison, create a copy of the image with a binary filter:
+                var binaryImage = workingImage.ToImage<Gray, byte>().ThresholdBinary(new Gray(125), new
+                Gray(255)).Mat;
+                // Sample for gaussian blur:
+                var blurredImage = new Mat();
+                var cannyImage = new Mat();
+                var decoratedImage = new Mat();
+                CvInvoke.GaussianBlur(workingImage, blurredImage, new Size(9, 9), 0);
+                // convert to B/W
+                CvInvoke.CvtColor(blurredImage, blurredImage, typeof(Bgr), typeof(Gray));
+                // apply canny:
+                // NOTE: Canny function can frequently create duplicate lines on the same shape
+                // depending on blur amount and threshold values, some tweaking might be needed.
+                // You might also find that not using Canny and instead using FindContours on
+                // a binary-threshold image is more accurate.
+                CvInvoke.Canny(blurredImage, cannyImage, 150, 255);
+                // make a copy of the canny image, convert it to color for decorating:
+                CvInvoke.CvtColor(cannyImage, decoratedImage, typeof(Gray), typeof(Bgr));
+                // find contours:
+
+                using (VectorOfVectorOfPoint contours = new VectorOfVectorOfPoint())
+                {
+                    // Build list of contours
+
+                    CvInvoke.FindContours(cannyImage, contours, null, RetrType.List,
+                    ChainApproxMethod.ChainApproxSimple);
+                    Point center = new Point();
+                    for (int i = 0; i < contours.Size; i++)
+                    {
+                        VectorOfPoint contour = contours[i];
+                        double area = CvInvoke.ContourArea(contour);
+                        if (area < 50 || area > 600)
+                        {
+                            continue;
+                        }
+
+                        CvInvoke.Polylines(decoratedImage, contour, true, new Bgr(Color.Red).MCvScalar);
+                        Rectangle boundingBox = CvInvoke.BoundingRectangle(contour);
+                        center = new Point(boundingBox.Width / 2 + boundingBox.X, boundingBox.Height / 2 + boundingBox.Y);
+                        DecoratedBox(decoratedImage, contour, boundingBox, area, center);
+
+                    }
+                    Invoke(new Action(() =>
+                    {
+                        labelContor.Text = $"There are {contours.Size} contours detected";
+                        labelCordinate.Text = $"{center.X}, {center.Y}";
+                    }));
+                    }
+
+                // output images:
+                sourcePictureBox.Image = workingImage.Bitmap;
+                decoratedPictureBox.Image = decoratedImage.Bitmap;
+            }
+        }
+        private static void DecoratedBox(Mat frame, VectorOfPoint contour, Rectangle boundingBox, double area, Point center)
+        {
+            double boundingBoxArea = boundingBox.Width * boundingBox.Height;
+            if (area > boundingBoxArea * 0.70)
+            {
+                // Drawing contour and box around it
+                CvInvoke.Polylines(frame, contour, true, new Bgr(Color.Red).MCvScalar);
+                CvInvoke.Rectangle(frame, boundingBox, new Bgr(Color.Red).MCvScalar);
+            }
+            if (area <= boundingBoxArea * 0.70)
+            {
+                // Drawing contour and box around it
+                CvInvoke.Polylines(frame, contour, true, new Bgr(Color.Blue).MCvScalar);
+                CvInvoke.Rectangle(frame, boundingBox, new Bgr(Color.Blue).MCvScalar);
+            }
+            CvInvoke.Circle(frame, center, 2, new Bgr(Color.Blue).MCvScalar, 2);
+        }
+
+        private void ArdunioSerial_DataRecieved(object sender, SerialDataReceivedEventArgs e)
+        {
+            Invoke(new Action(() =>
+            {
+                responseFormArdunioLbl.Text = $"Response From Ardunio: {arduinoSerial.ReadLine()}";
+            }));
+        }
+        private void Send0Bin_Click(object sneder, EventArgs e)
+        {
+            buffer[0] = Convert.ToByte(0);
+            arduinoSerial.Write(buffer, 0, 1);
+        }
+
+        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            serialMonitoringThread.Abort();
+            // terminate the image processing thread to avoid orphaned processes
+            _captureThread.Abort();
+        }
+    }
+}
